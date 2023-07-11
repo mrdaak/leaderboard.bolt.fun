@@ -1,0 +1,332 @@
+<head>
+  <title>BOLT.FUN - LEADERBOARD</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css" />
+</head>
+
+<body>
+  <script src="https://unpkg.com/mithril/mithril.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ramda/0.25.0/ramda.min.js"></script>
+  <script>
+    var root = document.body;
+
+    const tournamentQuery = `query GetTournamentById($idOrSlug: String!) {
+  getTournamentById(idOrSlug: $idOrSlug) {
+    id
+    title
+    description
+    thumbnail_image
+    cover_image
+    start_date
+    end_date
+    location
+    website
+    events_count
+    makers_count
+    projects_count
+    prizes {
+      title
+      amount
+      image
+      __typename
+    }
+    tracks {
+      id
+      title
+      icon
+      __typename
+    }
+    judges {
+      name
+      company
+      avatar
+      __typename
+    }
+    events {
+      id
+      title
+      image
+      description
+      starts_at
+      ends_at
+      location
+      website
+      type
+      links
+      __typename
+    }
+    faqs {
+      question
+      answer
+      __typename
+    }
+    __typename
+  }
+  getMakersInTournament(tournamentIdOrSlug: $idOrSlug, take: 4) {
+    makers {
+      user {
+        id
+        avatar
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+  pubkeysOfMakersInTournament(tournamentIdOrSlug: $idOrSlug)
+  pubkeysOfProjectsInTournament(tournamentIdOrSlug: $idOrSlug)
+}`
+
+
+    const projectsQuery = `query GetProjectsInTournament($tournamentId: Int!, $take: Int, $skip: Int, $trackId: Int, $roleId: Int, $search: String) {
+  getProjectsInTournament(
+    tournamentId: $tournamentId
+    take: $take
+    skip: $skip
+    trackId: $trackId
+    roleId: $roleId
+    search: $search
+  ) {
+    allItemsCount
+    hasNext
+    hasPrev
+    projects {
+      id
+      title
+      description
+      thumbnail_image
+      members_count
+      votes_count
+      stories {
+        id
+        createdAt
+      }
+      category {
+        id
+        title
+        icon
+        __typename
+      }
+      recruit_roles {
+      id
+      title
+      icon
+      level
+      __typename
+      }
+      __typename
+      }
+      __typename
+      }
+      }`;
+
+    const FILTER_ATTRS = { votes: "votes_count", stories: "stories" };
+    const DIRECTION = { ascend: "ascend", descend: "descend" };
+    const FILTERS = {
+      votes_desc: {
+        name: "votes_desc",
+        attr: FILTER_ATTRS.votes,
+        direction: DIRECTION.descend,
+        label: "votes (most popular first)",
+      },
+      votes_asc: {
+        name: "votes_asc",
+        attr: FILTER_ATTRS.votes,
+        direction: DIRECTION.ascend,
+        label: "votes (least popular first)",
+      },
+      stories_desc: {
+        name: "stories_desc",
+        attr: FILTER_ATTRS.stories,
+        direction: DIRECTION.descend,
+        label: "stories (most popular first)",
+      },
+      stories_asc: {
+        name: "stories_asc",
+        attr: FILTER_ATTRS.stories,
+        direction: DIRECTION.ascend,
+        label: "stories (least popular first)",
+      },
+    };
+
+    const TOURNAMENTS = {
+      1: { name: "Legends of Lightning", id: 1 },
+      2: { name: "Nostr Hack", id: 2 },
+      3: { name: "AiForALL", id: 3 },
+    };
+
+    const queryGraphql = (query, variables) => {
+      return m.request({
+        url: "https://cache.bolt.fun/",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: {
+          query,
+          variables,
+        },
+      })
+    }
+
+    var Data = {
+      tournament: TOURNAMENTS["1"],
+      filter: FILTERS.votes_desc,
+      projects: {
+        list: null,
+        fetch: function () {
+          queryGraphql(tournamentQuery, { idOrSlug: `${Data.tournament.id}` })
+            .then((resp) => (Data.tournament = resp.data.getTournamentById))
+            .then(() => {
+              queryGraphql(projectsQuery, {
+                tournamentId: Data.tournament.id,
+                trackId: null,
+                roleId: null,
+                search: "",
+                skip: 0,
+                take: 200,
+              }).then(
+                (resp) => {
+                  const projects = resp.data.getProjectsInTournament.projects;
+                  const tournamentStartedAt = new Date(Data.tournament.start_date).valueOf();
+                  const tournamentEndedAt = new Date(Data.tournament.end_date).valueOf();
+                  Data.projects.list = projects.map(pr => ({
+                    ...pr, stories: pr.stories.filter(s => {
+                      const storyCreatedAt = new Date(s.createdAt).valueOf();
+                      return storyCreatedAt > tournamentStartedAt && storyCreatedAt < tournamentEndedAt
+                    })
+                  }));
+                }
+              );
+            })
+        },
+      },
+    };
+
+    var Projects = {
+      oninit: Data.projects.fetch,
+      view: function (vnode) {
+        const filterFn =
+          Data.filter.attr === FILTER_ATTRS.votes
+            ? R.prop("votes_count")
+            : R.compose(R.length, R.prop("stories"));
+
+        if (Data.projects.list === null) {
+          return m(".loading", "loading...")
+        }
+
+        const sorted = R.sortWith([R[Data.filter.direction](filterFn)])(
+          Data.projects.list
+        );
+        return sorted.map(function (project) {
+          if (Data.searchInput && !R.toLower(project.title).includes(Data.searchInput)) {
+            return null;
+          }
+
+          return m("article.media.p-4", [
+            m(
+              "figure.media-left",
+              m(
+                "p.image.is-64x64",
+                m("img", { src: project.thumbnail_image })
+              ),
+              m(
+                "div.media-content",
+                { style: { maxWidth: "600px" } },
+                m("div.content.mt-2.mb-2", [
+                  m("p", [
+                    m("strong", project.title),
+                    m("br"),
+                    project.description,
+                    m("div.mt-2"),
+                    `👍 votes: ${project.votes_count}`,
+                    m("br"),
+                    `💬 stories: ${project.stories.length}`,
+                  ]),
+                ])
+              )
+            ),
+          ]);
+        });
+      },
+    };
+
+    var AppWrapper = {
+      view: function (vnode) {
+        return m("div.app.p-4", [
+          m("img", {
+            src: "https://bolt.fun/static/media/logo-hz.8ba91086f1fcf1211ce03524cd550038.svg",
+          }),
+          m("h1.title", "LEADERBOARD"),
+          m("div.filters.is-flex", [
+            m("div", [
+              m("div.mb-4", [
+                m("label.label", `Tournament`),
+                m(
+                  "div.select",
+                  m(
+                    "select",
+                    {
+                      onchange: function (e) {
+                        Data.tournament = TOURNAMENTS[`${e.target.value}`];
+                        Data.projects.list = null;
+                        Data.projects.fetch();
+                      },
+                      value: Data.tournament.id,
+                    },
+                    Object.values(TOURNAMENTS).map(function (tournament) {
+                      return m(
+                        "option",
+                        { value: tournament.id },
+                        tournament.name
+                      );
+                    })
+                  )
+                ),
+              ]),
+            ]),
+            m("div", [
+              m("div.mb-4.ml-2", [
+                m("label.label", `Sort projects by`),
+                m(
+                  "div.select",
+                  m(
+                    "select",
+                    {
+                      onchange: function (e) {
+                        Data.filter = FILTERS[e.target.value];
+                      },
+                      value: Data.filter.name,
+                    },
+                    Object.values(FILTERS).map(function (filter) {
+                      return m("option", { value: filter.name }, filter.label);
+                    })
+                  )
+                ),
+              ]),
+            ]),
+            m("div", [
+              m("div.mb-4.ml-2", [
+                m("label.label", `Filter by title`),
+                m(
+                  "input.input",
+                  {
+                    placeholder: 'project title',
+                    onchange: function (e) {
+                      Data.searchInput = e.target.value;
+                    },
+                    value: Data.searchInput,
+                  }
+                ),
+              ]),
+            ]),
+          ]),
+
+          m("div", m(Projects)),
+        ]);
+      },
+    };
+
+    m.mount(root, AppWrapper);
+  </script>
+</body>
